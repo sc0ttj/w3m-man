@@ -21,6 +21,21 @@
 #  man -H <command>     # view man page as HTML in $BROWSER
 #  man <command> --url  # print the URL of the man page to STDOUT
 
+# TODO:
+#
+# - Display the path searched for manpages:
+#
+#   man --path
+#
+# - Display the location of a manpage rather than the manpage itself:
+#
+#   man -w command
+#
+# - Search for manpages containing a search string:
+#
+#   man -k "search_string"
+#
+
 if [ "$1" = "--help" ];then
 
   echo "# man (w3m-man)
@@ -167,11 +182,38 @@ function prettifier {
   esac
 }
 
-# if we already have the man page, just print it and exit
-[ "$1" != "-H" ] && [ "$2" != "--url" ] && [ -f "$manpage_file" ] && cat "$manpage_file" | $pager && exit 0
-
 # create the config dir, if needed
 [ ! -d $HOME/.w3m-manpages ] && mkdir -p $HOME/.w3m-manpages
+
+# if we already have a proper man page, just print it and exit
+if [ ! -z "$MANPATH" ] && [ "$(which groff)" != "" ] && [ "$1" != "-H" ] && [ "$2" != "--url" ];then
+  usegroff=false
+  groff_file=''
+  zipped=false
+  paths=$(echo "${MANPATH}" | tr ':' '\n')
+  # for each path
+  for dir in ./ $paths
+  do
+    zipped=false
+    # let's find the man page file
+    groff_file=$dir/man${section}/${command}.${section}
+    # it might be gzipped
+    [ ! -f $groff_file ] && groff_file=$dir/man${section}/${command}.${section}.gz && zipped=true
+    # it might be in the current directory
+    [ -f ./${command}.${section} ] && groff_file="./${command}.${section}"
+    [ -f ./${command}.${section}.gz ] && groff_file="./${command}.${section}.gz" && zipped=true
+    # if we found the file
+    if [ -f $groff_file ];then
+      # unpack it, if needed
+      [ $zipped = true ] && zcat $groff_file > /tmp/unzipped && groff_file=/tmp/unzipped
+      # now lets read the man page and exit
+      groff -T utf8 -man $groff_file | $pager && exit 0
+    fi
+  done
+fi
+
+# if we already have the man page as plain text, just print it and exit
+[ "$1" != "-H" ] && [ "$2" != "--url" ] && [ -f "$manpage_file" ] && cat "$manpage_file" | $pager && exit 0
 
 # set a list of urls to check:
 
@@ -276,9 +318,14 @@ fi
 
 # if _still_ nothing, try download it online from the next section
 if [ ! -f "$manpage_file" ];then
+  if [ -f /tmp/man_loopcount ] && [ $(wc -l /tmp/man_loopcount | cut -f1 -d' ') -ge 8 ];then
+    rm /tmp/man_loopcount
+    exit 1
+  fi
   next_section=$(($section + 1))
   [ $next_section -eq 9 ] && next_section=1
   echo -n "."
+  echo "." >> /tmp/man_loopcount
   exec $0 $next_section $command
   retval=$?
   [ $retval -eq 0 ] && rm /tmp/manprogress
